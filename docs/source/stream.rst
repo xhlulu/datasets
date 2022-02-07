@@ -6,6 +6,9 @@ Dataset streaming lets you get started with a dataset without waiting for the en
 * You don't want to wait for an extremely large dataset to download.
 * The dataset size exceeds the amount of disk space on your computer.
 
+.. image:: /imgs/stream.gif
+   :align: center
+
 For example, the English split of the `OSCAR <https://huggingface.co/datasets/oscar>`_ dataset is 1.2 terabytes, but you can use it instantly with streaming. Stream a dataset by setting ``streaming=True`` in :func:`datasets.load_dataset` as shown below:
 
 .. code-block::
@@ -103,3 +106,81 @@ Define sampling probabilities from each of the original datasets for more contro
    [{'text': 'Mtendere Village was inspired by the vision...}, {'text': 'Lily James cannot fight the music...}]
 
 Around 80% of the final dataset is made of the ``en_dataset``, and 20% of the ``fr_dataset``.
+
+Remove
+^^^^^^
+
+Remove columns on-the-fly with :func:`datasets.IterableDataset.remove_columns`. Specify the name of the column to remove:
+
+.. code-block::
+
+   >>> from datasets import load_dataset
+   >>> dataset = load_dataset('m4', 'en', streaming=True, split='train')
+   >>> dataset = dataset.remove_columns('timestamp')
+
+``Map``
+^^^^^^^
+
+Similar to the :func:`datasets.Dataset.map` function for a regular :class:`datasets.Dataset`, 🤗  Datasets features :func:`datasets.IterableDataset.map` for processing :class:`datasets.IterableDataset`\s.
+:func:`datasets.IterableDataset.map` applies processing on-the-fly when examples are streamed.
+
+It allows you to apply a processing function to each example in a dataset, independently or in batches. This function can even create new rows and columns.
+
+The following example demonstrates how to tokenize a :class:`datasets.IterableDataset`. The function needs to accept and output a ``dict``:
+
+
+.. code-block::
+
+   >>> from datasets import load_dataset
+   >>> from transformers import AutoTokenizer
+   >>> dataset = load_dataset("mc4", "en", streaming=True, split="train")
+   >>> tokenizer = AutoTokenizer.from_pretrained('distilbert-base-uncased')
+   >>> def encode(examples):
+   ...     return tokenizer(examples['text'], truncation=True, padding='max_length')
+   >>> dataset = dataset.map(encode, batched=True)
+   >>> next(iter(dataset))
+   {'input_ids': 101, 8466, 1018, 1010, 4029, 2475, 2062, 18558, 3100, 2061, ...,1106, 3739, 102],
+   'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ..., 1, 1]}
+
+
+Stream in a training loop
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:class:`datasets.IterableDataset` can be integrated into a training loop. First, shuffle the dataset:
+
+.. code-block::
+
+   >>> buffer_size, seed = 10_000, 42
+   >>> dataset = dataset.shuffle(buffer_size, seed)
+
+Lastly, create a simple training loop and start training:
+
+.. tab:: PyTorch
+
+   >>> import torch
+   >>> from torch.utils.data import DataLoader
+   >>> from transformers import AutoModelForMaskedLM, DataCollatorForLanguageModeling
+   >>> from tqdm import tqdm
+   >>> dataset = dataset.with_format("torch")
+   >>> dataloader = DataLoader(dataset, collate_fn=DataCollatorForLanguageModeling(tokenizer))
+   >>> device = 'cuda' if torch.cuda.is_available() else 'cpu' 
+   >>> model = AutoModelForMaskedLM.from_pretrained("distilbert-base-uncased")
+   >>> model.train().to(device)
+   >>> optimizer = torch.optim.AdamW(params=model.parameters(), lr=1e-5)
+   >>> for epoch in range(3):
+   ...     dataset.set_epoch(epoch)
+   ...     for i, batch in enumerate(tqdm(dataloader, total=5)):
+   ...         if i == 5:
+   ...             break
+   ...         batch = {k: v.to(device) for k, v in batch.items()}
+   ...         outputs = model(**batch)
+   ...         loss = outputs[0]
+   ...         loss.backward()
+   ...         optimizer.step()
+   ...         optimizer.zero_grad()
+   ...         if i % 10 == 0:
+   ...             print(f"loss: {loss}")
+
+.. tab:: TensorFlow
+  
+   WIP

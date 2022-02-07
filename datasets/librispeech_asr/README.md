@@ -80,6 +80,10 @@ A typical data point comprises the path to the audio file, usually called `file`
 ```
 {'chapter_id': 141231,
  'file': '/home/patrick/.cache/huggingface/datasets/downloads/extracted/b7ded9969e09942ab65313e691e6fc2e12066192ee8527e21d634aca128afbe2/dev_clean/1272/141231/1272-141231-0000.flac',
+  'audio': {'path': '/home/patrick/.cache/huggingface/datasets/downloads/extracted/b7ded9969e09942ab65313e691e6fc2e12066192ee8527e21d634aca128afbe2/dev_clean/1272/141231/1272-141231-0000.flac',
+  'array': array([-0.00048828, -0.00018311, -0.00137329, ...,  0.00079346,
+          0.00091553,  0.00085449], dtype=float32),
+  'sampling_rate': 16000},
  'id': '1272-141231-0000',
  'speaker_id': 1272,
  'text': 'A MAN SAID TO THE UNIVERSE SIR I EXIST'}
@@ -89,6 +93,8 @@ A typical data point comprises the path to the audio file, usually called `file`
 ### Data Fields
 
 - file: A path to the downloaded audio file in .flac format.
+
+- audio: A dictionary containing the path to the downloaded audio file, the decoded audio array, and the sampling rate. Note that when accessing the audio column: `dataset[0]["audio"]` the audio file is automatically decoded and resampled to `dataset.features["audio"].sampling_rate`. Decoding and resampling of a large number of audio files might take a significant amount of time. Thus it is important to first query the sample index before the `"audio"` column, *i.e.* `dataset[0]["audio"]` should **always** be preferred over `dataset["audio"][0]`.
 
 - text: the transcription of the audio file.
 
@@ -154,7 +160,7 @@ For "other", the data is split into train, validation, and test set. The train s
 
 ### Personal and Sensitive Information
 
-[Needs More Information]
+The dataset consists of people who have donated their voice online. You agree to not attempt to determine the identity of speakers in this dataset.
 
 ## Considerations for Using the Data
 
@@ -178,7 +184,7 @@ The dataset was initially created by Vassil Panayotov, Guoguo Chen, Daniel Povey
 
 ### Licensing Information
 
-CC BY 4.0
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
 
 ### Citation Information
 

@@ -66,7 +66,7 @@ languages:
 - zh-HK
 - zh-TW
 licenses:
-- cc-by-nc-4.0
+- cc0-1.0
 multilinguality:
 - multilingual
 size_categories:
@@ -254,7 +254,7 @@ English
 A typical data point comprises the path to the audio file, called path and its sentence. Additional fields include accent, age, client_id, up_votes down_votes, gender, locale and segment.
 
 `
-{'accent': 'netherlands', 'age': 'fourties', 'client_id': 'bbbcb732e0f422150c30ff3654bbab572e2a617da107bca22ff8b89ab2e4f124d03b6a92c48322862f60bd0179ae07baf0f9b4f9c4e11d581e0cec70f703ba54', 'down_votes': 0, 'gender': 'male', 'locale': 'nl', 'path': 'nl/clips/common_voice_nl_23522441.mp3', 'segment': "''", 'sentence': 'Ik vind dat een dubieuze procedure.', 'up_votes': 2}
+{'accent': 'netherlands', 'age': 'fourties', 'client_id': 'bbbcb732e0f422150c30ff3654bbab572e2a617da107bca22ff8b89ab2e4f124d03b6a92c48322862f60bd0179ae07baf0f9b4f9c4e11d581e0cec70f703ba54', 'down_votes': 0, 'gender': 'male', 'locale': 'nl', 'path': 'nl/clips/common_voice_nl_23522441.mp3', 'segment': "''", 'sentence': 'Ik vind dat een dubieuze procedure.', 'up_votes': 2, 'audio': {'path': `nl/clips/common_voice_nl_23522441.mp3', 'array': array([-0.00048828, -0.00018311, -0.00137329, ...,  0.00079346, 0.00091553,  0.00085449], dtype=float32), 'sampling_rate': 48000}
 `
 
 ### Data Fields
@@ -262,6 +262,8 @@ A typical data point comprises the path to the audio file, called path and its s
 client_id: An id for which client (voice) made the recording
 
 path: The path to the audio file
+
+audio: A dictionary containing the path to the downloaded audio file, the decoded audio array, and the sampling rate. Note that when accessing the audio column: `dataset[0]["audio"]` the audio file is automatically decoded and resampled to `dataset.features["audio"].sampling_rate`. Decoding and resampling of a large number of audio files might take a significant amount of time. Thus it is important to first query the sample index before the `"audio"` column, *i.e.* `dataset[0]["audio"]` should **always** be preferred over `dataset["audio"][0]`.
 
 sentence: The sentence the user was prompted to speak
 
@@ -346,7 +348,7 @@ The dataset consists of people who have donated their voice online.  You agree t
 
 ### Licensing Information
 
-[More Information Needed] 
+Public Domain, [CC-0](https://creativecommons.org/share-your-work/public-domain/cc0/)
 
 ### Citation Information
 

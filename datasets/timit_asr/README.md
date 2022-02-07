@@ -77,6 +77,9 @@ A typical data point comprises the path to the audio file, usually called `file`
 ```
 {
     'file': '/data/TRAIN/DR4/MMDM0/SI681.WAV', 
+    'audio': {'path': '/data/TRAIN/DR4/MMDM0/SI681.WAV',
+	  		  'array': array([-0.00048828, -0.00018311, -0.00137329, ...,  0.00079346, 0.00091553,  0.00085449], dtype=float32),
+	  		  'sampling_rate': 16000},
     'text': 'Would such an act of refusal be useful?', 
     'phonetic_detail': [{'start': '0', 'stop': '1960', 'utterance': 'h#'}, 
                         {'start': '1960', 'stop': '2466', 'utterance': 'w'}, 
@@ -129,6 +132,8 @@ A typical data point comprises the path to the audio file, usually called `file`
 ### Data Fields
 
 - file: A path to the downloaded audio file in .wav format.
+
+- audio: A dictionary containing the path to the downloaded audio file, the decoded audio array, and the sampling rate. Note that when accessing the audio column: `dataset[0]["audio"]` the audio file is automatically decoded and resampled to `dataset.features["audio"].sampling_rate`. Decoding and resampling of a large number of audio files might take a significant amount of time. Thus it is important to first query the sample index before the `"audio"` column, *i.e.* `dataset[0]["audio"]` should **always** be preferred over `dataset["audio"][0]`.
 
 - text: The transcription of the audio file.
 
@@ -183,7 +188,7 @@ be found [here](https://catalog.ldc.upenn.edu/docs/LDC93S1/TESTSET.TXT)
 
 ### Personal and Sensitive Information
 
-[Needs More Information]
+The dataset consists of people who have donated their voice online. You agree to not attempt to determine the identity of speakers in this dataset.
 
 ## Considerations for Using the Data
 
@@ -197,7 +202,7 @@ be found [here](https://catalog.ldc.upenn.edu/docs/LDC93S1/TESTSET.TXT)
 
 ### Other Known Limitations
 
-[Needs More Information]
+Dataset provided for research purposes only. Please check dataset license for additional information.
 
 ## Additional Information
 
@@ -207,7 +212,7 @@ The dataset was created by John S. Garofolo, Lori F. Lamel, William M. Fisher, J
 
 ### Licensing Information
 
-LDC User Agreement for Non-Members
+[LDC User Agreement for Non-Members](https://catalog.ldc.upenn.edu/license/ldc-non-members-agreement.pdf)
 
 ### Citation Information
 ```

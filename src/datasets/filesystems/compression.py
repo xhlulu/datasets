@@ -37,9 +37,12 @@ class BaseCompressedFileFileSystem(AbstractArchiveFileSystem):
         self.file = fsspec.open(
             fo, mode="rb", protocol=target_protocol, compression=self.compression, **(target_options or {})
         )
-        self.info = self.file.fs.info(self.file.path)
         self.compressed_name = os.path.basename(self.file.path.split("::")[0])
-        self.uncompressed_name = self.compressed_name[: self.compressed_name.rindex(".")]
+        self.uncompressed_name = (
+            self.compressed_name[: self.compressed_name.rindex(".")]
+            if "." in self.compressed_name
+            else self.compressed_name
+        )
         self.dir_cache = None
 
     @classmethod
@@ -49,7 +52,7 @@ class BaseCompressedFileFileSystem(AbstractArchiveFileSystem):
 
     def _get_dirs(self):
         if self.dir_cache is None:
-            f = {**self.info, "name": self.uncompressed_name}
+            f = {**self.file.fs.info(self.file.path), "name": self.uncompressed_name}
             self.dir_cache = {f["name"]: f}
 
     def cat(self, path: str):

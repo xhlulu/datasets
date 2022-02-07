@@ -1,4 +1,3 @@
-# coding=utf-8
 # Copyright 2020 The HuggingFace Datasets Authors and the TensorFlow Datasets Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,13 +22,14 @@ import functools
 import itertools
 import os
 import pickle
+import re
 import sys
 import types
 from io import BytesIO as StringIO
 from multiprocessing import Pool, RLock
 from shutil import disk_usage
 from types import CodeType, FunctionType
-from typing import Callable, ClassVar, Generic, Optional, Tuple, Union
+from typing import Callable, ClassVar, Dict, Generic, Optional, Tuple, Union
 
 import dill
 import numpy as np
@@ -77,8 +77,35 @@ def size_str(size_in_bytes):
     for (name, size_bytes) in _NAME_LIST:
         value = size_in_bytes / size_bytes
         if value >= 1.0:
-            return "{:.2f} {}".format(value, name)
-    return "{} {}".format(int(size_in_bytes), "bytes")
+            return f"{value:.2f} {name}"
+    return f"{int(size_in_bytes)} bytes"
+
+
+def string_to_dict(string: str, pattern: str) -> Dict[str, str]:
+    """Un-format a string using a python f-string pattern.
+    From https://stackoverflow.com/a/36838374
+
+    Examples:
+
+        >>> p = 'hello, my name is {name} and I am a {age} year old {what}'
+        >>> s = p.format(name='cody', age=18, what='quarterback')
+        >>> s
+        'hello, my name is cody and I am a 18 year old quarterback'
+        >>> string_to_dict(s, p)
+        {'age': '18', 'name': 'cody', 'what': 'quarterback'}
+
+    Args:
+        string (str): input string
+        pattern (str): pattern formatted like a python f-string
+
+    Returns:
+        Dict[str, str]: dictionary of variable -> value, retrieved from the input using the pattern
+    """
+    regex = re.sub(r"{(.+?)}", r"(?P<_\1>.+)", pattern)
+    values = list(re.search(regex, string).groups())
+    keys = re.findall(r"{(.+?)}", pattern)
+    _dict = dict(zip(keys, values))
+    return _dict
 
 
 @contextlib.contextmanager
@@ -92,9 +119,35 @@ def temporary_assignment(obj, attr, value):
         setattr(obj, attr, original)
 
 
+def unique_values(values):
+    """Iterate over iterable and return only unique values in order."""
+    seen = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            yield value
+
+
+def no_op_if_value_is_null(func):
+    """If the value is None, return None, else call `func`."""
+
+    def wrapper(value):
+        return func(value) if value is not None else None
+
+    return wrapper
+
+
+def first_non_null_value(iterable):
+    """Return the index and the value of the first non-null value in the iterable. If all values are None, return -1 as index."""
+    for i, value in enumerate(iterable):
+        if value is not None:
+            return i, value
+    return -1, None
+
+
 def zip_dict(*dicts):
     """Iterate over items of dictionaries grouped by their keys."""
-    for key in set(itertools.chain(*dicts)):  # set merge all keys
+    for key in unique_values(itertools.chain(*dicts)):  # set merge all keys
         # Will raise KeyError if the dict don't have the same keys
         yield key, tuple(d[key] for d in dicts)
 
@@ -114,17 +167,17 @@ class NonMutableDict(dict):
         )
         if kwargs:
             raise ValueError("NonMutableDict cannot be initialized with kwargs.")
-        super(NonMutableDict, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def __setitem__(self, key, value):
         if key in self:
             raise ValueError(self._error_msg.format(key=key))
-        return super(NonMutableDict, self).__setitem__(key, value)
+        return super().__setitem__(key, value)
 
     def update(self, other):
         if any(k in self for k in other):
             raise ValueError(self._error_msg.format(key=set(self) & set(other)))
-        return super(NonMutableDict, self).update(other)
+        return super().update(other)
 
 
 class classproperty(property):  # pylint: disable=invalid-name
@@ -136,7 +189,7 @@ class classproperty(property):  # pylint: disable=invalid-name
 
 def _single_map_nested(args):
     """Apply a function recursively to each element of a nested data struct."""
-    function, data_struct, types, rank, disable_tqdm = args
+    function, data_struct, types, rank, disable_tqdm, desc = args
 
     # Singleton first to spare some computation
     if not isinstance(data_struct, dict) and not isinstance(data_struct, types):
@@ -147,18 +200,18 @@ def _single_map_nested(args):
         logging.set_verbosity_warning()
     # Print at least one thing to fix tqdm in notebooks in multiprocessing
     # see https://github.com/tqdm/tqdm/issues/485#issuecomment-473338308
-    if rank is not None and not disable_tqdm and "notebook" in tqdm.__name__:
+    if rank is not None and not disable_tqdm and any("notebook" in tqdm_cls.__name__ for tqdm_cls in tqdm.__mro__):
         print(" ", end="", flush=True)
 
     # Loop over single examples or batches and write to buffer/file if examples are to be updated
     pbar_iterable = data_struct.items() if isinstance(data_struct, dict) else data_struct
-    pbar_desc = "#" + str(rank) if rank is not None else None
+    pbar_desc = (desc + " " if desc is not None else "") + "#" + str(rank) if rank is not None else desc
     pbar = utils.tqdm(pbar_iterable, disable=disable_tqdm, position=rank, unit="obj", desc=pbar_desc)
 
     if isinstance(data_struct, dict):
-        return {k: _single_map_nested((function, v, types, None, True)) for k, v in pbar}
+        return {k: _single_map_nested((function, v, types, None, True, None)) for k, v in pbar}
     else:
-        mapped = [_single_map_nested((function, v, types, None, True)) for v in pbar]
+        mapped = [_single_map_nested((function, v, types, None, True, None)) for v in pbar]
         if isinstance(data_struct, list):
             return mapped
         elif isinstance(data_struct, tuple):
@@ -177,6 +230,7 @@ def map_nested(
     num_proc: Optional[int] = None,
     types=None,
     disable_tqdm: bool = True,
+    desc: Optional[str] = None,
 ):
     """Apply a function recursively to each element of a nested data struct.
     If num_proc > 1 and the length of data_struct is longer than num_proc: use multi-processing
@@ -196,17 +250,15 @@ def map_nested(
     if not isinstance(data_struct, dict) and not isinstance(data_struct, types):
         return function(data_struct)
 
-    disable_tqdm = (
-        disable_tqdm or bool(logging.get_verbosity() == logging.NOTSET) or not utils.is_progress_bar_enabled()
-    )
+    disable_tqdm = disable_tqdm or not utils.is_progress_bar_enabled()
     iterable = list(data_struct.values()) if isinstance(data_struct, dict) else data_struct
 
     if num_proc is None:
         num_proc = 1
     if num_proc <= 1 or len(iterable) <= num_proc:
         mapped = [
-            _single_map_nested((function, obj, types, None, True))
-            for obj in utils.tqdm(iterable, disable=disable_tqdm)
+            _single_map_nested((function, obj, types, None, True, None))
+            for obj in utils.tqdm(iterable, disable=disable_tqdm, desc=desc)
         ]
     else:
         split_kwds = []  # We organize the splits ourselve (contiguous splits)
@@ -215,25 +267,26 @@ def map_nested(
             mod = len(iterable) % num_proc
             start = div * index + min(index, mod)
             end = start + div + (1 if index < mod else 0)
-            split_kwds.append((function, iterable[start:end], types, index, disable_tqdm))
-        assert len(iterable) == sum(len(i[1]) for i in split_kwds), (
-            f"Error dividing inputs iterable among processes. "
-            f"Total number of objects {len(iterable)}, "
-            f"length: {sum(len(i[1]) for i in split_kwds)}"
-        )
-        logger.info(
-            "Spawning {} processes for {} objects in slices of {}".format(
-                num_proc, len(iterable), [len(i[1]) for i in split_kwds]
+            split_kwds.append((function, iterable[start:end], types, index, disable_tqdm, desc))
+
+        if len(iterable) != sum(len(i[1]) for i in split_kwds):
+            raise ValueError(
+                f"Error dividing inputs iterable among processes. "
+                f"Total number of objects {len(iterable)}, "
+                f"length: {sum(len(i[1]) for i in split_kwds)}"
             )
+
+        logger.info(
+            f"Spawning {num_proc} processes for {len(iterable)} objects in slices of {[len(i[1]) for i in split_kwds]}"
         )
         initargs, initializer = None, None
         if not disable_tqdm:
             initargs, initializer = (RLock(),), tqdm.set_lock
         with Pool(num_proc, initargs=initargs, initializer=initializer) as pool:
             mapped = pool.map(_single_map_nested, split_kwds)
-        logger.info("Finished {} processes".format(num_proc))
+        logger.info(f"Finished {num_proc} processes")
         mapped = [obj for proc_res in mapped for obj in proc_res]
-        logger.info("Unpacked {} objects".format(len(mapped)))
+        logger.info(f"Unpacked {len(mapped)} objects")
 
     if isinstance(data_struct, dict):
         return dict(zip(data_struct.keys(), mapped))
@@ -268,7 +321,7 @@ def flatten_nest_dict(d):
     flat_dict = NonMutableDict()
     for k, v in d.items():
         if isinstance(v, dict):
-            flat_dict.update({"{}/{}".format(k, k2): v2 for k2, v2 in flatten_nest_dict(v).items()})
+            flat_dict.update({f"{k}/{k2}": v2 for k2, v2 in flatten_nest_dict(v).items()})
         else:
             flat_dict[k] = v
     return flat_dict
@@ -313,6 +366,11 @@ class Pickler(dill.Pickler):
             _CloudPickleTypeHintFix._save_parametrized_type_hint(self, obj)
         else:
             dill.Pickler.save_global(self, obj, name=name)
+
+    def memoize(self, obj):
+        # don't memoize strings since two identical strings can have different python ids
+        if type(obj) != str:
+            dill.Pickler.memoize(self, obj)
 
 
 def dump(obj, file):
@@ -391,7 +449,7 @@ class _CloudPickleTypeHintFix:
             else:
                 initargs = (obj.__origin__, (list(args[:-1]), args[-1]))
         else:  # pragma: no cover
-            raise pickle.PicklingError("Datasets pickle Error: Unknown type {}".format(type(obj)))
+            raise pickle.PicklingError(f"Datasets pickle Error: Unknown type {type(obj)}")
         pickler.save_reduce(_CloudPickleTypeHintFix._create_parametrized_type_hint, initargs, obj=obj)
 
 
@@ -402,7 +460,7 @@ def _save_code(pickler, obj):
     This is a modified version that removes the origin (filename + line no.)
     of functions created in notebooks or shells for example.
     """
-    dill._dill.log.info("Co: %s" % obj)
+    dill._dill.log.info(f"Co: {obj}")
     # The filename of a function is the .py file where it is defined.
     # Filenames of functions created in notebooks or shells start with '<'
     # ex: <ipython-input-13-9ed2afe61d25> for ipython, and <stdin> for shell
@@ -490,7 +548,7 @@ def save_function(pickler, obj):
     the keys in the output dictionary of globalvars can change.
     """
     if not dill._dill._locate_function(obj):
-        dill._dill.log.info("F1: %s" % obj)
+        dill._dill.log.info(f"F1: {obj}")
         if getattr(pickler, "_recurse", False):
             # recurse to get all globals referred to by obj
             globalvars = dill.detect.globalvars
@@ -549,7 +607,7 @@ def save_function(pickler, obj):
             pickler.clear_memo()
         dill._dill.log.info("# F1")
     else:
-        dill._dill.log.info("F2: %s" % obj)
+        dill._dill.log.info(f"F2: {obj}")
         name = getattr(obj, "__qualname__", getattr(obj, "__name__", None))
         dill._dill.StockPickler.save_global(pickler, obj, name=name)
         dill._dill.log.info("# F2")
@@ -567,7 +625,7 @@ try:
 
     @pklregister(type(regex.Regex("", 0)))
     def _save_regex(pickler, obj):
-        dill._dill.log.info("Re: %s" % obj)
+        dill._dill.log.info(f"Re: {obj}")
         args = (
             obj.pattern,
             obj.flags,

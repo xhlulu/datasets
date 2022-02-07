@@ -1,5 +1,5 @@
 # Lint as: python3
-""" HuggingFace/Datasets is an open library of NLP datasets.
+""" HuggingFace/Datasets is an open library of datasets.
 
 Note:
 
@@ -62,15 +62,9 @@ To create the package for pypi.
    Push the commit to remote: "git push origin master"
 """
 
-import datetime
-import itertools
 import os
-import sys
 
 from setuptools import find_packages, setup
-
-
-DOCLINES = __doc__.split("\n")
 
 
 REQUIRED_PKGS = [
@@ -79,7 +73,7 @@ REQUIRED_PKGS = [
     # Backend and serialization.
     # Minimum 3.0.0 to support mix of struct and list types in parquet, and batch iterators of parquet data
     # pyarrow 4.0.0 introduced segfault bug, see: https://github.com/huggingface/datasets/pull/2268
-    "pyarrow>=1.0.0,!=4.0.0",
+    "pyarrow>=3.0.0,!=4.0.0",
     # For smart caching dataset processing
     "dill",
     # For performance gains with apache arrow
@@ -102,9 +96,17 @@ REQUIRED_PKGS = [
     # for data streaming via http
     "aiohttp",
     # To get datasets from the Datasets Hub on huggingface.co
-    "huggingface_hub>=0.0.14,<0.1.0",
+    "huggingface_hub>=0.1.0,<1.0.0",
     # Utilities from PyPA to e.g., compare versions
     "packaging",
+]
+
+AUDIO_REQUIRE = [
+    "librosa",
+]
+
+VISION_REQURE = [
+    "Pillow>=6.2.1",
 ]
 
 BENCHMARKS_REQUIRE = [
@@ -118,6 +120,7 @@ TESTS_REQUIRE = [
     # test dependencies
     "absl-py",
     "pytest",
+    "pytest-datadir",
     "pytest-xdist",
     # optional dependencies
     "apache-beam>=2.26.0",
@@ -125,17 +128,20 @@ TESTS_REQUIRE = [
     "aiobotocore",
     "boto3",
     "botocore",
-    "faiss-cpu",
+    "faiss-cpu>=1.6.4",
     "fsspec[s3]",
     "moto[s3,server]==2.0.4",
     "rarfile>=4.0",
     "s3fs==2021.08.1",
-    "tensorflow>=2.3",
+    "tensorflow>=2.3,!=2.6.0,!=2.6.1",
     "torch",
+    "torchaudio",
+    "soundfile",
     "transformers",
     # datasets dependencies
     "bs4",
     "conllu",
+    "h5py",
     "langdetect",
     "lxml",
     "mwparserfromhell",
@@ -153,6 +159,8 @@ TESTS_REQUIRE = [
     "scikit-learn",
     "jiwer",
     "sentencepiece",  # for bleurt
+    "torchmetrics==0.6.0",  # for comet: https://github.com/PyTorchLightning/metrics/issues/770
+    "mauve-text",
     # to speed up pip backtracking
     "toml>=0.10.1",
     "requests_file>=1.5.1",
@@ -164,9 +172,10 @@ TESTS_REQUIRE = [
     "importlib_resources;python_version<'3.7'",
 ]
 
-if os.name == "nt":  # windows
-    TESTS_REQUIRE.remove("faiss-cpu")  # faiss doesn't exist on windows
-else:
+TESTS_REQUIRE.extend(VISION_REQURE)
+TESTS_REQUIRE.extend(AUDIO_REQUIRE)
+
+if os.name != "nt":
     # dependencies of unbabel-comet
     # only test if not on windows since there're issues installing fairseq on windows
     TESTS_REQUIRE.extend(
@@ -179,14 +188,15 @@ else:
         ]
     )
 
-
-QUALITY_REQUIRE = ["black==21.4b0", "flake8==3.7.9", "isort", "pyyaml>=5.3.1"]
+QUALITY_REQUIRE = ["black==21.4b0", "flake8>=3.8.3", "isort>=5.0.0", "pyyaml>=5.3.1"]
 
 
 EXTRAS_REQUIRE = {
+    "audio": AUDIO_REQUIRE,
+    "vision": VISION_REQURE,
     "apache-beam": ["apache-beam>=2.26.0"],
-    "tensorflow": ["tensorflow>=2.2.0"],
-    "tensorflow_gpu": ["tensorflow-gpu>=2.2.0"],
+    "tensorflow": ["tensorflow>=2.2.0,!=2.6.0,!=2.6.1"],
+    "tensorflow_gpu": ["tensorflow-gpu>=2.2.0,!=2.6.0,!=2.6.1"],
     "torch": ["torch"],
     "s3": [
         "fsspec",
@@ -212,14 +222,15 @@ EXTRAS_REQUIRE = {
         "sphinx-panels",
         "sphinx-inline-tabs",
         "myst-parser",
+        "Markdown!=3.3.5",
     ],
 }
 
 setup(
     name="datasets",
-    version="1.12.2.dev0",  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
-    description=DOCLINES[0],
-    long_description="\n".join(DOCLINES[2:]),
+    version="1.18.4.dev0",  # expected format is one of x.y.z.dev0, or x.y.z.rc1 or x.y.z (no to dashes, yes to dots)
+    description="HuggingFace community-driven open-source library of datasets",
+    long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author="HuggingFace Inc.",
     author_email="thomas@huggingface.co",
@@ -242,6 +253,9 @@ setup(
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+        "Programming Language :: Python :: 3.10",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords="datasets machine learning datasets metrics",

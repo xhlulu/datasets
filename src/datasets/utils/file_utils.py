@@ -8,6 +8,7 @@ import copy
 import io
 import json
 import os
+import posixpath
 import re
 import shutil
 import sys
@@ -20,19 +21,16 @@ from dataclasses import dataclass
 from functools import partial
 from hashlib import sha256
 from pathlib import Path
-from typing import Dict, List, Optional, TypeVar, Union
-from urllib.parse import urlparse
+from typing import Dict, Optional, TypeVar, Union
+from urllib.parse import urljoin, urlparse
 
 import numpy as np
-import posixpath
 import requests
-from tqdm.contrib.concurrent import thread_map
 
 from .. import __version__, config, utils
 from . import logging
 from .extract import ExtractManager
 from .filelock import FileLock
-from .tqdm_utils import tqdm
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -236,11 +234,14 @@ class DownloadConfig:
         force_extract (:obj:`bool`, default ``False``): If True when extract_compressed_file is True and the archive
             was already extracted, re-extract the archive and override the folder where it was extracted.
         delete_extracted (:obj:`bool`, default ``False``): Whether to delete (or keep) the extracted files.
-        use_etag (:obj:`bool`, default ``True``):
-        num_proc (:obj:`int`, optional):
+        use_etag (:obj:`bool`, default ``True``): Whether to use the ETag HTTP response header to validate the cached files.
+        num_proc (:obj:`int`, optional): The number of processes to launch to download the files in parallel.
         max_retries (:obj:`int`, default ``1``): The number of times to retry an HTTP request if it fails.
         use_auth_token (:obj:`str` or :obj:`bool`, optional): Optional string or boolean to use as Bearer token
             for remote files on the Datasets Hub. If True, will get token from ~/.huggingface.
+        ignore_url_params (:obj:`bool`, default ``False``): Whether to strip all query parameters and #fragments from
+            the download URL before using it for caching the file.
+        download_desc (:obj:`str`, optional): A description to be displayed alongside with the progress bar while downloading the files.
     """
 
     cache_dir: Optional[Union[str, Path]] = None
@@ -256,6 +257,8 @@ class DownloadConfig:
     num_proc: Optional[int] = None
     max_retries: int = 1
     use_auth_token: Optional[Union[str, bool]] = None
+    ignore_url_params: bool = False
+    download_desc: Optional[str] = None
 
     def copy(self) -> "DownloadConfig":
         return self.__class__(**{k: copy.deepcopy(v) for k, v in self.__dict__.items()})
@@ -305,16 +308,18 @@ def cached_path(
             use_etag=download_config.use_etag,
             max_retries=download_config.max_retries,
             use_auth_token=download_config.use_auth_token,
+            ignore_url_params=download_config.ignore_url_params,
+            download_desc=download_config.download_desc,
         )
     elif os.path.exists(url_or_filename):
         # File, and it exists.
         output_path = url_or_filename
     elif is_local_path(url_or_filename):
         # File, but it doesn't exist.
-        raise FileNotFoundError("Local file {} doesn't exist".format(url_or_filename))
+        raise FileNotFoundError(f"Local file {url_or_filename} doesn't exist")
     else:
         # Something unknown
-        raise ValueError("unable to parse {} as a URL or as a local path".format(url_or_filename))
+        raise ValueError(f"unable to parse {url_or_filename} as a URL or as a local path")
 
     if output_path is None:
         return output_path
@@ -328,18 +333,18 @@ def cached_path(
 
 
 def get_datasets_user_agent(user_agent: Optional[Union[str, dict]] = None) -> str:
-    ua = "datasets/{}; python/{}".format(__version__, config.PY_VERSION)
-    ua += "; pyarrow/{}".format(config.PYARROW_VERSION)
+    ua = f"datasets/{__version__}; python/{config.PY_VERSION}"
+    ua += f"; pyarrow/{config.PYARROW_VERSION}"
     if config.TORCH_AVAILABLE:
-        ua += "; torch/{}".format(config.TORCH_VERSION)
+        ua += f"; torch/{config.TORCH_VERSION}"
     if config.TF_AVAILABLE:
-        ua += "; tensorflow/{}".format(config.TF_VERSION)
+        ua += f"; tensorflow/{config.TF_VERSION}"
     if config.JAX_AVAILABLE:
-        ua += "; jax/{}".format(config.JAX_VERSION)
+        ua += f"; jax/{config.JAX_VERSION}"
     if config.BEAM_AVAILABLE:
-        ua += "; apache_beam/{}".format(config.BEAM_VERSION)
+        ua += f"; apache_beam/{config.BEAM_VERSION}"
     if isinstance(user_agent, dict):
-        ua += "; " + "; ".join("{}/{}".format(k, v) for k, v in user_agent.items())
+        ua += f"; {'; '.join(f'{k}/{v}' for k, v in user_agent.items())}"
     elif isinstance(user_agent, str):
         ua += "; " + user_agent
     return ua
@@ -348,7 +353,7 @@ def get_datasets_user_agent(user_agent: Optional[Union[str, dict]] = None) -> st
 def get_authentication_headers_for_url(url: str, use_auth_token: Optional[Union[str, bool]] = None) -> dict:
     """Handle the HF authentication"""
     headers = {}
-    if url.startswith("https://huggingface.co/"):
+    if url.startswith(config.HF_ENDPOINT):
         token = None
         if isinstance(use_auth_token, str):
             token = use_auth_token
@@ -357,7 +362,7 @@ def get_authentication_headers_for_url(url: str, use_auth_token: Optional[Union[
 
             token = hf_api.HfFolder.get_token()
         if token:
-            headers["authorization"] = "Bearer {}".format(token)
+            headers["authorization"] = f"Bearer {token}"
     return headers
 
 
@@ -366,7 +371,7 @@ class OfflineModeIsEnabled(ConnectionError):
 
 
 def _raise_if_offline_mode_is_enabled(msg: Optional[str] = None):
-    """Raise a OfflineModeIsEnabled error (subclass of ConnectionError) if HF_DATASETS_OFFLINE is True."""
+    """Raise an OfflineModeIsEnabled error (subclass of ConnectionError) if HF_DATASETS_OFFLINE is True."""
     if config.HF_DATASETS_OFFLINE:
         raise OfflineModeIsEnabled(
             "Offline mode is enabled." if msg is None else "Offline mode is enabled. " + str(msg)
@@ -432,11 +437,13 @@ def ftp_get(url, temp_file, timeout=10.0):
         raise ConnectionError(e) from None
 
 
-def http_get(url, temp_file, proxies=None, resume_size=0, headers=None, cookies=None, timeout=100.0, max_retries=0):
+def http_get(
+    url, temp_file, proxies=None, resume_size=0, headers=None, cookies=None, timeout=100.0, max_retries=0, desc=None
+):
     headers = copy.deepcopy(headers) or {}
     headers["user-agent"] = get_datasets_user_agent(user_agent=headers.get("user-agent"))
     if resume_size > 0:
-        headers["Range"] = "bytes=%d-" % (resume_size,)
+        headers["Range"] = f"bytes={resume_size:d}-"
     response = _request_with_retry(
         method="GET",
         url=url,
@@ -451,19 +458,17 @@ def http_get(url, temp_file, proxies=None, resume_size=0, headers=None, cookies=
         return
     content_length = response.headers.get("Content-Length")
     total = resume_size + int(content_length) if content_length is not None else None
-    progress = utils.tqdm(
+    with utils.tqdm(
         unit="B",
         unit_scale=True,
         total=total,
         initial=resume_size,
-        desc="Downloading",
-        disable=bool(logging.get_verbosity() == logging.NOTSET),
-    )
-    for chunk in response.iter_content(chunk_size=1024):
-        if chunk:  # filter out keep-alive new chunks
+        desc=desc or "Downloading",
+        disable=not utils.is_progress_bar_enabled(),
+    ) as progress:
+        for chunk in response.iter_content(chunk_size=1024):
             progress.update(len(chunk))
             temp_file.write(chunk)
-    progress.close()
 
 
 def http_head(
@@ -492,36 +497,20 @@ def request_etag(url: str, use_auth_token: Optional[Union[str, bool]] = None) ->
     return etag
 
 
-def request_etags(
-    urls: List[str],
-    use_auth_token: Optional[Union[str, bool]] = None,
-    max_workers=64,
-    tqdm_kwargs: Optional[dict] = None,
-) -> List[Optional[str]]:
-    tqdm_kwargs = tqdm_kwargs if tqdm_kwargs is not None else {}
-    tqdm_kwargs["desc"] = tqdm_kwargs.get("desc", "Get ETags")
-    tqdm_kwargs["disable"] = tqdm_kwargs.get("disable", len(urls) <= 16 or logging.get_verbosity() == logging.NOTSET)
-    return thread_map(
-        partial(request_etag, use_auth_token=use_auth_token),
-        urls,
-        max_workers=max_workers,
-        tqdm_class=tqdm,
-        **tqdm_kwargs,
-    )
-
-
 def get_from_cache(
     url,
     cache_dir=None,
     force_download=False,
     proxies=None,
-    etag_timeout=10,
+    etag_timeout=100,
     resume_download=False,
     user_agent=None,
     local_files_only=False,
     use_etag=True,
     max_retries=0,
     use_auth_token=None,
+    ignore_url_params=False,
+    download_desc=None,
 ) -> str:
     """
     Given a URL, look for the corresponding file in the local cache.
@@ -543,15 +532,21 @@ def get_from_cache(
 
     os.makedirs(cache_dir, exist_ok=True)
 
-    original_url = url  # Some parameters may be added
+    if ignore_url_params:
+        # strip all query parameters and #fragments from the URL
+        cached_url = urljoin(url, urlparse(url).path)
+    else:
+        cached_url = url  # additional parameters may be added to the given URL
+
     connected = False
     response = None
     cookies = None
     etag = None
+    head_error = None
 
     # Try a first time to file the file on the local file system without eTag (None)
     # if we don't ask for 'force_download' then we spare a request
-    filename = hash_url_to_filename(original_url, etag=None)
+    filename = hash_url_to_filename(cached_url, etag=None)
     cache_path = os.path.join(cache_dir, filename)
 
     if os.path.exists(cache_path) and not force_download and not use_etag:
@@ -589,19 +584,28 @@ def get_from_cache(
                 or (response.status_code == 405 and "drive.google.com" in url)
                 or (
                     response.status_code == 403
-                    and re.match(r"^https?://github.com/.*?/.*?/releases/download/.*?/.*?$", url)
+                    and (
+                        re.match(r"^https?://github.com/.*?/.*?/releases/download/.*?/.*?$", url)
+                        or re.match(r"^https://.*?s3.*?amazonaws.com/.*?$", response.url)
+                    )
                 )
+                or (response.status_code == 403 and "ndownloader.figstatic.com" in url)
             ):
                 connected = True
-                logger.info("Couldn't get ETag version for url {}".format(url))
-        except (EnvironmentError, requests.exceptions.Timeout):
+                logger.info(f"Couldn't get ETag version for url {url}")
+            elif response.status_code == 401 and config.HF_ENDPOINT in url and use_auth_token is None:
+                raise ConnectionError(
+                    f"Unauthorized for URL {url}. Please use the parameter ``use_auth_token=True`` after logging in with ``huggingface-cli login``"
+                )
+        except (OSError, requests.exceptions.Timeout) as e:
             # not connected
+            head_error = e
             pass
 
     # connected == False = we don't have a connection, or url doesn't exist, or is otherwise inaccessible.
     # try to get the last downloaded one
     if not connected:
-        if os.path.exists(cache_path):
+        if os.path.exists(cache_path) and not force_download:
             return cache_path
         if local_files_only:
             raise FileNotFoundError(
@@ -609,12 +613,17 @@ def get_from_cache(
                 " disabled. To enable file online look-ups, set 'local_files_only' to False."
             )
         elif response is not None and response.status_code == 404:
-            raise FileNotFoundError("Couldn't find file at {}".format(url))
+            raise FileNotFoundError(f"Couldn't find file at {url}")
         _raise_if_offline_mode_is_enabled(f"Tried to reach {url}")
-        raise ConnectionError("Couldn't reach {}".format(url))
+        if head_error is not None:
+            raise ConnectionError(f"Couldn't reach {url} ({repr(head_error)})")
+        elif response is not None:
+            raise ConnectionError(f"Couldn't reach {url} (error {response.status_code})")
+        else:
+            raise ConnectionError(f"Couldn't reach {url}")
 
     # Try a second time
-    filename = hash_url_to_filename(original_url, etag)
+    filename = hash_url_to_filename(cached_url, etag)
     cache_path = os.path.join(cache_dir, filename)
 
     if os.path.exists(cache_path) and not force_download:
@@ -645,7 +654,7 @@ def get_from_cache(
         # Download to temporary file, then copy to cache dir once finished.
         # Otherwise you get corrupt cache entries if the download gets interrupted.
         with temp_file_manager() as temp_file:
-            logger.info("%s not found in cache or force_download set to True, downloading to %s", url, temp_file.name)
+            logger.info(f"{url} not found in cache or force_download set to True, downloading to {temp_file.name}")
 
             # GET file object
             if url.startswith("ftp://"):
@@ -659,12 +668,13 @@ def get_from_cache(
                     headers=headers,
                     cookies=cookies,
                     max_retries=max_retries,
+                    desc=download_desc,
                 )
 
-        logger.info("storing %s in cache at %s", url, cache_path)
+        logger.info(f"storing {url} in cache at {cache_path}")
         shutil.move(temp_file.name, cache_path)
 
-        logger.info("creating metadata file for %s", cache_path)
+        logger.info(f"creating metadata file for {cache_path}")
         meta = {"url": url, "etag": etag}
         meta_path = cache_path + ".json"
         with open(meta_path, "w", encoding="utf-8") as meta_file:
@@ -675,7 +685,7 @@ def get_from_cache(
 
 def add_start_docstrings(*docstr):
     def docstring_decorator(fn):
-        fn.__doc__ = "".join(docstr) + (fn.__doc__ if fn.__doc__ is not None else "")
+        fn.__doc__ = "".join(docstr) + "\n\n" + (fn.__doc__ if fn.__doc__ is not None else "")
         return fn
 
     return docstring_decorator
@@ -683,7 +693,7 @@ def add_start_docstrings(*docstr):
 
 def add_end_docstrings(*docstr):
     def docstring_decorator(fn):
-        fn.__doc__ = (fn.__doc__ if fn.__doc__ is not None else "") + "".join(docstr)
+        fn.__doc__ = (fn.__doc__ if fn.__doc__ is not None else "") + "\n\n" + "".join(docstr)
         return fn
 
     return docstring_decorator

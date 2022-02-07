@@ -24,7 +24,7 @@ def parse_flag_from_env(key, default=False):
             _value = strtobool(value)
         except ValueError:
             # More values are supported, but let's keep the message simple.
-            raise ValueError("If set, {} must be yes or no.".format(key))
+            raise ValueError(f"If set, {key} must be yes or no.")
     return _value
 
 
@@ -32,19 +32,6 @@ _run_slow_tests = parse_flag_from_env("RUN_SLOW", default=False)
 _run_remote_tests = parse_flag_from_env("RUN_REMOTE", default=False)
 _run_local_tests = parse_flag_from_env("RUN_LOCAL", default=True)
 _run_packaged_tests = parse_flag_from_env("RUN_PACKAGED", default=True)
-
-
-def require_pyarrow_at_least_3(test_case):
-    """
-    Decorator marking a test that requires PyArrow 3.0.0
-    to allow nested types in parquet, as well as batch iterators of parquet files.
-
-    These tests are skipped when the PyArrow version is outdated.
-
-    """
-    if config.PYARROW_VERSION.major < 3:
-        test_case = unittest.skip("test requires PyArrow>=3.0.0")(test_case)
-    return test_case
 
 
 def require_beam(test_case):
@@ -134,6 +121,18 @@ def require_jax(test_case):
     """
     if not config.JAX_AVAILABLE:
         test_case = unittest.skip("test requires JAX")(test_case)
+    return test_case
+
+
+def require_pil(test_case):
+    """
+    Decorator marking a test that requires Pillow.
+
+    These tests are skipped when Pillow isn't installed.
+
+    """
+    if not config.PIL_AVAILABLE:
+        test_case = unittest.skip("test requires Pillow")(test_case)
     return test_case
 
 
@@ -231,7 +230,7 @@ def packaged(test_case):
 
 def remote(test_case):
     """
-    Decorator marking a test as one that relies on github or aws.
+    Decorator marking a test as one that relies on GitHub or the Hugging Face Hub.
 
     Remote tests are skipped by default. Set the RUN_REMOTE environment variable
     to a falsy value to not run them.
@@ -278,8 +277,6 @@ def offline(mode=OfflineSimulationMode.CONNECTION_FAILS, timeout=1e-16):
     HF_DATASETS_OFFLINE_SET_TO_1: the HF_DATASETS_OFFLINE environment variable is set to 1.
         This makes the http/ftp calls of the library instantly fail and raise an OfflineModeEmabled error.
     """
-    import socket
-
     from requests import request as online_request
 
     def timeout_request(method, url, **kwargs):
@@ -301,7 +298,7 @@ def offline(mode=OfflineSimulationMode.CONNECTION_FAILS, timeout=1e-16):
             raise
 
     def offline_socket(*args, **kwargs):
-        raise socket.error("Offline mode is enabled.")
+        raise OSError("Offline mode is enabled.")
 
     if mode is OfflineSimulationMode.CONNECTION_FAILS:
         # inspired from https://stackoverflow.com/a/18601897
@@ -310,7 +307,8 @@ def offline(mode=OfflineSimulationMode.CONNECTION_FAILS, timeout=1e-16):
     elif mode is OfflineSimulationMode.CONNECTION_TIMES_OUT:
         # inspired from https://stackoverflow.com/a/904609
         with patch("requests.request", timeout_request):
-            yield
+            with patch("requests.api.request", timeout_request):
+                yield
     elif mode is OfflineSimulationMode.HF_DATASETS_OFFLINE_SET_TO_1:
         with patch("datasets.config.HF_DATASETS_OFFLINE", True):
             yield

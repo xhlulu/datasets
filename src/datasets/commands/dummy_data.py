@@ -10,7 +10,7 @@ from typing import Optional
 
 from datasets import config
 from datasets.commands import BaseDatasetsCLICommand
-from datasets.load import import_main_class, prepare_module
+from datasets.load import dataset_module_factory, import_main_class
 from datasets.utils import MockDownloadManager
 from datasets.utils.download_manager import DownloadManager
 from datasets.utils.file_utils import DownloadConfig
@@ -123,7 +123,7 @@ class DummyDataGeneratorDownloadManager(DownloadManager):
             # Line by line text file (txt, csv etc.)
             if is_line_by_line_text_file:
                 Path(dst_path).parent.mkdir(exist_ok=True, parents=True)
-                with open(src_path, "r", encoding=encoding) as src_file:
+                with open(src_path, encoding=encoding) as src_file:
                     with open(dst_path, "w", encoding=encoding) as dst_file:
                         first_lines = []
                         for i, line in enumerate(src_file):
@@ -134,7 +134,7 @@ class DummyDataGeneratorDownloadManager(DownloadManager):
                 return 1
             # json file
             elif ".json" in dst_path_extensions:
-                with open(src_path, "r", encoding=encoding) as src_file:
+                with open(src_path, encoding=encoding) as src_file:
                     json_data = json.load(src_file)
                     if json_field is not None:
                         json_data = json_data[json_field]
@@ -187,7 +187,7 @@ class DummyDataGeneratorDownloadManager(DownloadManager):
     @staticmethod
     def _create_xml_dummy_data(src_path, dst_path, xml_tag, n_lines=5, encoding=DEFAULT_ENCODING):
         Path(dst_path).parent.mkdir(exist_ok=True, parents=True)
-        with open(src_path, "r", encoding=encoding) as src_file:
+        with open(src_path, encoding=encoding) as src_file:
             n_line = 0
             parents = []
             for event, elem in ET.iterparse(src_file, events=("start", "end")):
@@ -287,8 +287,8 @@ class DummyDataCommand(BaseDatasetsCLICommand):
 
     def run(self):
         set_verbosity_warning()
-        module_path, hash = prepare_module(self._path_to_dataset)
-        builder_cls = import_main_class(module_path)
+        dataset_module = dataset_module_factory(self._path_to_dataset)
+        builder_cls = import_main_class(dataset_module.module_path)
 
         # use `None` as config if no configs
         builder_configs = builder_cls.BUILDER_CONFIGS or [None]
@@ -302,7 +302,7 @@ class DummyDataCommand(BaseDatasetsCLICommand):
                     version = builder_config.version
                     name = builder_config.name
 
-                dataset_builder = builder_cls(name=name, hash=hash, cache_dir=tmp_dir)
+                dataset_builder = builder_cls(name=name, hash=dataset_module.hash, cache_dir=tmp_dir)
                 mock_dl_manager = MockDownloadManager(
                     dataset_name=self._dataset_name,
                     config=builder_config,

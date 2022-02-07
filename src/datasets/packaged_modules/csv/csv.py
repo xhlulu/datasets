@@ -1,4 +1,3 @@
-# coding=utf-8
 from dataclasses import dataclass
 from typing import List, Optional, Union
 
@@ -138,12 +137,14 @@ class Csv(datasets.ArrowBasedBuilder):
             files = data_files
             if isinstance(files, str):
                 files = [files]
-            return [datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"files": files})]
+            return [
+                datasets.SplitGenerator(name=datasets.Split.TRAIN, gen_kwargs={"files": dl_manager.iter_files(files)})
+            ]
         splits = []
         for split_name, files in data_files.items():
             if isinstance(files, str):
                 files = [files]
-            splits.append(datasets.SplitGenerator(name=split_name, gen_kwargs={"files": files}))
+            splits.append(datasets.SplitGenerator(name=split_name, gen_kwargs={"files": dl_manager.iter_files(files)}))
         return splits
 
     def _generate_tables(self, files):
